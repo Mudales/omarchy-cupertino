@@ -30,6 +30,22 @@ omarchy restart shell
 The restart is needed once: the shell hot-reloads plugin *code*, but a newly
 added `service` plugin is only instantiated at shell start.
 
+### The whole style at once
+
+`bootstrap.sh` installs this plugin *and* [Tahoe Lock
+Screen](https://github.com/Mudales/omarchy-tahoe-lock), the macOS-style lock
+screen this look was drawn next to:
+
+```bash
+git clone https://github.com/Mudales/omarchy-cupertino
+./omarchy-cupertino/bootstrap.sh
+```
+
+The clone you run it from is just the installer — both plugins land in
+`~/.config/omarchy/plugins/` as ordinary git checkouts, so `omarchy plugin
+update` keeps working on each of them afterwards. Re-running the script updates
+instead of failing.
+
 Or by hand:
 
 ```bash
