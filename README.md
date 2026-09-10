@@ -107,6 +107,12 @@ At runtime only — no config file is rewritten:
   hairline; the opacity rides in the color token for the same reason, since
   those sections apply one `border-alpha` to every state at once
 
+These settings push rather than own: turning one off stops the plugin managing
+that option, and Hyprland keeps the last value pushed until its next config
+reload — `hyprctl reload`, or any edit to your hypr config — which returns it to
+whatever your own config says. Turning one back on applies immediately, on the
+`shell.json` save alone.
+
 Shadows need somewhere to land: with `general:gaps_out` at 0 and windows
 tiled edge to edge, the shadow is covered by the neighbor it falls on and only
 shows around floating windows. A gap of 4-8px is what makes both it and the
