@@ -34,7 +34,12 @@ import qs.Commons
 //                following Hyprland's general:gaps_out.
 //   chrome       hairline card borders and borderless controls. Default true.
 //   borderAlpha  hairline opacity, 0-1. Default 0.14.
-//   borderWidth  hairline thickness in px. Default 1.
+//   borderWidth  hairline thickness in px, cards and window edges alike.
+//                Default 1.
+//   shadow       soft drop shadow under windows. Default true.
+//   shadowRange  shadow spread in px. Default 24.
+//   windowBorder hairline edge on windows, in the card hairline's color.
+//                Default true.
 Item {
   id: root
 
@@ -53,6 +58,14 @@ Item {
   property bool chrome: true
   property real borderAlpha: 0.14
   property int borderWidth: 1
+  property bool shadow: true
+  property int shadowRange: 24
+  property bool windowBorder: true
+
+  // macOS separates its windows with a light edge that is brighter on the
+  // focused one. Both are the card hairline, leaned either side of it.
+  readonly property real activeBorderAlpha: Math.min(1, root.borderAlpha * 1.6)
+  readonly property real inactiveBorderAlpha: Math.min(1, root.borderAlpha * 0.7)
 
   readonly property bool active: radius > 0
   readonly property int windowRadius: windowRadiusOverride >= 0 ? windowRadiusOverride : radius
@@ -109,7 +122,15 @@ Item {
     chrome = settingOf(entry, "chrome") !== false
     borderAlpha = realOr(settingOf(entry, "borderAlpha"), 0.14)
     borderWidth = intOr(settingOf(entry, "borderWidth"), 1)
+    shadow = settingOf(entry, "shadow") !== false
+    shadowRange = intOr(settingOf(entry, "shadowRange"), 24)
+    windowBorder = settingOf(entry, "windowBorder") !== false
     apply()
+  }
+
+  function hexByte(unit) {
+    var s = Math.max(0, Math.min(255, Math.round(unit * 255))).toString(16)
+    return s.length < 2 ? "0" + s : s
   }
 
   function apply() {
@@ -119,7 +140,7 @@ Item {
     applyChrome()
   }
 
-  // ------------------------------------------------------------------ radius
+  // ---------------------------------------------------------------- hyprland
 
   function applyShellRadius() {
     if (!root.active) return
@@ -132,34 +153,121 @@ Item {
   }
 
   function applyWindowRadius() {
-    if (!root.active || !root.roundWindows) return
+    if (!root.active) return
+    if (!root.roundWindows && !root.shadow && !root.windowBorder) return
     if (queryProc.running || luaProc.running || keywordProc.running) return
     queryProc.running = true
   }
 
-  // Read Hyprland's live value before writing: a no-op write is skipped, which
-  // keeps the config-reload path from turning into a write loop.
-  function handleWindowRounding(raw) {
-    var current = -1
-    try {
-      var json = JSON.parse(raw || "{}")
-      var n = Number(json.int)
-      if (isFinite(n)) current = n
-    } catch (e) {
-      return // hyprctl missing or Hyprland not up — leave windows alone.
+  // Hyprland echoes a gradient as "aarrggbb <angle>deg".
+  function gradientEcho(color, alpha) {
+    return (hexByte(alpha) + hexByte(color.r) + hexByte(color.g) + hexByte(color.b) + " 0deg").toLowerCase()
+  }
+
+  function rgbaToken(color, alpha) {
+    return "rgba(" + hexByte(color.r) + hexByte(color.g) + hexByte(color.b) + hexByte(alpha) + ")"
+  }
+
+  // Read the live values before writing: a push that would change nothing is
+  // skipped, which is what keeps the config-reload path from becoming a write
+  // loop if a Hyprland release ever raises configreloaded for its own eval.
+  function needsPush(raw) {
+    var seen = ({})
+    var objects = String(raw || "").match(/\{[^{}]*\}/g) || []
+    for (var i = 0; i < objects.length; i++) {
+      try {
+        var json = JSON.parse(objects[i])
+        if (json && json.option) seen[String(json.option)] = json
+      } catch (e) {
+        // Partial or unparseable reply; the remaining objects still count.
+      }
     }
-    if (current < 0 || current === root.windowRadius) return
-    luaProc.command = ["hyprctl", "eval",
-      "hl.config({ decoration = { rounding = " + root.windowRadius + " } })"]
+
+    if (root.roundWindows) {
+      var rounding = seen["decoration:rounding"]
+      if (!rounding || Number(rounding.int) !== root.windowRadius) return true
+    }
+    // Only `enabled` is compared: range, power and color are taste, and a
+    // hand-tuned value in your own Hyprland config should survive a reload.
+    if (root.shadow) {
+      var shadowOption = seen["decoration:shadow:enabled"]
+      if (!shadowOption || shadowOption.bool !== true) return true
+    }
+    if (root.windowBorder) {
+      var size = seen["general:border_size"]
+      if (!size || Number(size.int) !== root.borderWidth) return true
+      var activeBorder = seen["general:col.active_border"]
+      if (!activeBorder || String(activeBorder.gradient || "").toLowerCase()
+        !== gradientEcho(Color.foreground, root.activeBorderAlpha)) return true
+      var inactiveBorder = seen["general:col.inactive_border"]
+      if (!inactiveBorder || String(inactiveBorder.gradient || "").toLowerCase()
+        !== gradientEcho(Color.foreground, root.inactiveBorderAlpha)) return true
+    }
+    return false
+  }
+
+  function shadowColor() {
+    return "rgba(0000004d)"
+  }
+
+  function hyprlandLua() {
+    var decoration = []
+    var general = []
+    if (root.roundWindows) decoration.push("rounding = " + root.windowRadius)
+    if (root.shadow) {
+      decoration.push("shadow = { enabled = true, range = " + root.shadowRange
+        + ", render_power = 3, color = \"" + shadowColor() + "\" }")
+    }
+    if (root.windowBorder) {
+      general.push("border_size = " + root.borderWidth)
+      general.push("col = { active_border = \"" + rgbaToken(Color.foreground, root.activeBorderAlpha)
+        + "\", inactive_border = \"" + rgbaToken(Color.foreground, root.inactiveBorderAlpha) + "\" }")
+    }
+    var sections = []
+    if (decoration.length > 0) sections.push("decoration = { " + decoration.join(", ") + " }")
+    if (general.length > 0) sections.push("general = { " + general.join(", ") + " }")
+    if (sections.length === 0) return ""
+    return "hl.config({ " + sections.join(", ") + " })"
+  }
+
+  // The legacy-parser equivalent, for a hyprland.conf setup where `eval` is
+  // the call that gets refused instead of `keyword`.
+  function hyprlandKeywords() {
+    var commands = []
+    if (root.roundWindows) commands.push("keyword decoration:rounding " + root.windowRadius)
+    if (root.shadow) {
+      commands.push("keyword decoration:shadow:enabled true")
+      commands.push("keyword decoration:shadow:range " + root.shadowRange)
+      commands.push("keyword decoration:shadow:render_power 3")
+      commands.push("keyword decoration:shadow:color " + shadowColor())
+    }
+    if (root.windowBorder) {
+      commands.push("keyword general:border_size " + root.borderWidth)
+      commands.push("keyword general:col.active_border " + rgbaToken(Color.foreground, root.activeBorderAlpha))
+      commands.push("keyword general:col.inactive_border " + rgbaToken(Color.foreground, root.inactiveBorderAlpha))
+    }
+    return commands.join(" ; ")
+  }
+
+  function handleWindowState(raw) {
+    if (!needsPush(raw)) return
+    var lua = hyprlandLua()
+    if (lua.length === 0) return
+    luaProc.command = ["hyprctl", "eval", lua]
     luaProc.running = true
   }
 
   Process {
     id: queryProc
-    command: ["hyprctl", "-j", "getoption", "decoration:rounding"]
+    command: ["hyprctl", "-j", "--batch",
+      "getoption decoration:rounding"
+      + " ; getoption general:border_size"
+      + " ; getoption decoration:shadow:enabled"
+      + " ; getoption general:col.active_border"
+      + " ; getoption general:col.inactive_border"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.handleWindowRounding(text)
+      onStreamFinished: root.handleWindowState(text)
     }
   }
 
@@ -176,7 +284,9 @@ Item {
           Style.scheduleRefresh()
           return
         }
-        keywordProc.command = ["hyprctl", "keyword", "decoration:rounding", String(root.windowRadius)]
+        var keywords = root.hyprlandKeywords()
+        if (keywords.length === 0) return
+        keywordProc.command = ["hyprctl", "--batch", keywords]
         keywordProc.running = true
       }
     }
@@ -194,11 +304,6 @@ Item {
   // Keys this service put into Color.userShellValues last round, so a stale
   // hairline from the previous theme is withdrawn instead of accumulating.
   property var injected: ({})
-
-  function hexByte(unit) {
-    var s = Math.max(0, Math.min(255, Math.round(unit * 255))).toString(16)
-    return s.length < 2 ? "0" + s : s
-  }
 
   // "#rrggbbaa". Baking opacity into the color keeps each surface independent
   // of its `*-alpha` companion, which polkit and lock share across states.
