@@ -57,12 +57,17 @@ Item {
   readonly property bool active: radius > 0
   readonly property int windowRadius: windowRadiusOverride >= 0 ? windowRadiusOverride : radius
 
-  // Cards whose border is the theme's accent frame. Auth surfaces are in the
-  // list for their idle border only: polkit's `border-error` and lock's
-  // `border-active` / `border-error` keep the theme's vivid state colors, so
-  // the alpha rides in the color token rather than the shared `border-alpha`
-  // companion those sections apply to every state at once.
-  readonly property var cardSections: ["popups", "tooltip", "notifications", "menu", "launcher", "polkit", "lock"]
+  // Cards whose border is pure decoration: color and thickness are both ours.
+  readonly property var cardSections: ["popups", "tooltip", "notifications", "menu", "launcher"]
+
+  // Auth surfaces get the hairline on their idle border and nothing else.
+  // Their `border-active` / `border-error` states resolve width through the
+  // section's plain `border-width`, so setting that here would thin the
+  // wrong-password flash from the 2-3px those plugins ask for down to a
+  // hairline — the one moment the border is carrying information. The opacity
+  // rides in the color token for the same reason: polkit and lock apply one
+  // `border-alpha` to every state at once.
+  readonly property var authSections: ["polkit", "lock"]
 
   // ------------------------------------------------------------------ config
 
@@ -207,9 +212,11 @@ Item {
 
     var hairline = withAlpha(Color.foreground, root.borderAlpha)
     for (var i = 0; i < root.cardSections.length; i++) {
-      var section = root.cardSections[i]
-      preset[section + ".border"] = hairline
-      preset[section + ".border-width"] = String(root.borderWidth)
+      preset[root.cardSections[i] + ".border"] = hairline
+      preset[root.cardSections[i] + ".border-width"] = String(root.borderWidth)
+    }
+    for (var j = 0; j < root.authSections.length; j++) {
+      preset[root.authSections[j] + ".border"] = hairline
     }
 
     // `selected-border` has no width of its own, so it inherits the card's

@@ -90,12 +90,13 @@ At runtime only — no config file is rewritten:
 - Hyprland's `decoration:rounding`, via `hyprctl eval` (Omarchy's Lua config
   parser rejects `hyprctl keyword`; a legacy `hyprland.conf` setup falls back
   to it)
-- `border` / `border-width` on the `popups`, `tooltip`, `notifications`,
-  `menu`, `launcher`, `polkit`, and `lock` surfaces, plus the shared `controls`
-  state tokens. Auth surfaces keep their vivid state colors: only the idle
-  border is replaced, and the hairline's opacity rides in the color token
-  rather than in the `border-alpha` companion those sections share across
-  states.
+- `border` and `border-width` on the `popups`, `tooltip`, `notifications`,
+  `menu` and `launcher` surfaces, plus the shared `controls` state tokens
+- `border` — the idle one only — on `polkit` and `lock`. Their `border-active`
+  and `border-error` states resolve their width through the section's plain
+  `border-width`, so pinning that would thin the wrong-password flash to a
+  hairline; the opacity rides in the color token for the same reason, since
+  those sections apply one `border-alpha` to every state at once
 
 ## Uninstall
 
