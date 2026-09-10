@@ -14,6 +14,9 @@ A macOS-flavored look for the Omarchy shell, in one installable plugin.
 - **Windows lit and separated the same way.** A soft drop shadow (Omarchy
   ships with `decoration:shadow` off) and a 1px window edge in the card's
   hairline, brighter on the focused window than the rest.
+- **A little movement, and an edge you can grab.** Workspace switching ships
+  unanimated; this puts a 250ms nudge back. And a 1px window edge is too thin
+  to grab, so `resize_on_border` comes with it — drag an edge to resize.
 
 Both halves exist because a theme can't express them. `Style.cornerRadius`
 mirrors Hyprland's `decoration:rounding`, so anything that zeroes that option —
@@ -84,6 +87,11 @@ Radius and chrome changes hot-reload on save; nothing needs a restart.
 | `shadow`       | `true`   | Soft drop shadow under windows.                                                   |
 | `shadowRange`  | `24`     | Shadow spread, px.                                                                |
 | `windowBorder` | `true`   | 1px window edge in the hairline color, at `borderAlpha` × 1.6 focused and × 0.7 not. |
+| `workspaceAnimation` | `true` | Animate workspace switches (Omarchy disables this).                         |
+| `workspaceAnimationSpeed` | `2.5` | Duration in tenths of a second — 2.5 is 250ms.                          |
+| `workspaceAnimationStyle` | `slidefade 15%` | Any Hyprland workspace style: `slide`, `slidevert`, `fade`, `slidefade`, with an optional percentage. |
+| `resizeOnBorder` | `true` | Drag a window edge to resize. Super + right-drag keeps working either way.       |
+| `borderGrabArea` | `8`    | Pixels around the edge that count as the grab zone. Hyprland's own default is 15, wide enough to swallow clicks meant for a scrollbar. |
 
 Anything you want to keep from your theme, set it in
 `~/.config/omarchy/shell.toml` — a key in that file beats the preset here.
@@ -93,12 +101,15 @@ Anything you want to keep from your theme, set it in
 At runtime only — no config file is rewritten:
 
 - `Style.cornerRadius` (and `Style.gapsOut`, with `panelGap`)
-- Hyprland's `decoration:rounding`, `decoration:shadow`, `general:border_size`
-  and `general:col.active_border` / `col.inactive_border`, via `hyprctl eval`
-  (Omarchy's Lua config parser rejects `hyprctl keyword`; a legacy
-  `hyprland.conf` setup falls back to it). The live values are read first, so a
-  push that would change nothing is skipped, and only `shadow:enabled` is
-  compared — a range or color you tuned yourself survives a reload
+- Hyprland's `decoration:rounding`, `decoration:shadow`, `general:border_size`,
+  `general:col.active_border` / `col.inactive_border`,
+  `general:resize_on_border` / `extend_border_grab_area`, and the `workspaces`
+  animation — via `hyprctl eval` (Omarchy's Lua config parser rejects `hyprctl
+  keyword`; a legacy `hyprland.conf` setup falls back to it). The live values
+  are read back first, so a push that would change nothing is skipped; only
+  `shadow:enabled` is compared, so a range or color you tuned yourself survives
+  a reload. A `shell.json` edit pushes unconditionally, since a changed value
+  may be one the read-back can't see
 - `border` and `border-width` on the `popups`, `tooltip`, `notifications`,
   `menu` and `launcher` surfaces, plus the shared `controls` state tokens
 - `border` — the idle one only — on `polkit` and `lock`. Their `border-active`

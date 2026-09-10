@@ -40,6 +40,14 @@ import qs.Commons
 //   shadowRange  shadow spread in px. Default 24.
 //   windowBorder hairline edge on windows, in the card hairline's color.
 //                Default true.
+//   workspaceAnimation
+//                short movement when switching workspaces, which Omarchy
+//                ships disabled. Default true; -Speed (tenths of a second,
+//                default 2.5) and -Style (default "slidefade 15%") tune it.
+//   resizeOnBorder
+//                drag a window's edge to resize it — the 1px edge above is
+//                too thin to grab without it. Default true; borderGrabArea
+//                (default 8px) is how far from the edge the grab starts.
 Item {
   id: root
 
@@ -61,6 +69,13 @@ Item {
   property bool shadow: true
   property int shadowRange: 24
   property bool windowBorder: true
+  property bool workspaceAnimation: true
+  property real workspaceAnimationSpeed: 2.5
+  property string workspaceAnimationStyle: "slidefade 15%"
+  property bool resizeOnBorder: true
+  property int borderGrabArea: 8
+
+  readonly property string workspaceAnimationCurve: "easeOutQuint"
 
   // macOS separates its windows with a light edge that is brighter on the
   // focused one. Both are the card hairline, leaned either side of it.
@@ -95,6 +110,20 @@ Item {
     return (isFinite(n) && n >= 0) ? Math.round(n) : fallback
   }
 
+  function positiveOr(value, fallback) {
+    var n = Number(value)
+    return (isFinite(n) && n > 0) ? n : fallback
+  }
+
+  // Guards the Lua string too: a quote or a newline in a theme-adjacent value
+  // would otherwise end up inside the payload we hand to `hyprctl eval`.
+  function stringOr(value, fallback) {
+    if (typeof value !== "string") return fallback
+    var trimmed = value.replace(/^\s+|\s+$/g, "")
+    if (trimmed.length === 0 || trimmed.match(/["'\\\n\r;]/)) return fallback
+    return trimmed
+  }
+
   function realOr(value, fallback) {
     var n = Number(value)
     return isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
@@ -125,7 +154,14 @@ Item {
     shadow = settingOf(entry, "shadow") !== false
     shadowRange = intOr(settingOf(entry, "shadowRange"), 24)
     windowBorder = settingOf(entry, "windowBorder") !== false
-    apply()
+    workspaceAnimation = settingOf(entry, "workspaceAnimation") !== false
+    workspaceAnimationSpeed = positiveOr(settingOf(entry, "workspaceAnimationSpeed"), 2.5)
+    workspaceAnimationStyle = stringOr(settingOf(entry, "workspaceAnimationStyle"), "slidefade 15%")
+    resizeOnBorder = settingOf(entry, "resizeOnBorder") !== false
+    borderGrabArea = intOr(settingOf(entry, "borderGrabArea"), 8)
+    // A settings edit has to reach Hyprland even when every value it can read
+    // back already matches — the animation is the one it cannot read cheaply.
+    apply(true)
   }
 
   function hexByte(unit) {
@@ -133,10 +169,10 @@ Item {
     return s.length < 2 ? "0" + s : s
   }
 
-  function apply() {
+  function apply(force) {
     applyShellRadius()
     applyPanelGap()
-    applyWindowRadius()
+    applyHyprland(force === true)
     applyChrome()
   }
 
@@ -152,12 +188,21 @@ Item {
     if (Style.gapsOut !== root.panelGap) Style.gapsOut = root.panelGap
   }
 
-  function applyWindowRadius() {
-    if (!root.active) return
-    if (!root.roundWindows && !root.shadow && !root.windowBorder) return
+  function managesHyprland() {
+    return root.roundWindows || root.shadow || root.windowBorder
+      || root.workspaceAnimation || root.resizeOnBorder
+  }
+
+  // `force` skips the read-back comparison. A settings edit uses it, because
+  // the values that changed may be ones this plugin cannot read back.
+  function applyHyprland(force) {
+    if (!root.active || !managesHyprland()) return
     if (queryProc.running || luaProc.running || keywordProc.running) return
+    root.pendingForce = force === true
     queryProc.running = true
   }
+
+  property bool pendingForce: false
 
   // Hyprland echoes a gradient as "aarrggbb <angle>deg".
   function gradientEcho(color, alpha) {
@@ -173,11 +218,17 @@ Item {
   // loop if a Hyprland release ever raises configreloaded for its own eval.
   function needsPush(raw) {
     var seen = ({})
+    var animations = ({})
+    // Every object in the reply is flat — `getoption` returns one, and each
+    // entry of `animations` is one — so a non-greedy brace match splits them
+    // without needing a JSON parser for the batch envelope itself.
     var objects = String(raw || "").match(/\{[^{}]*\}/g) || []
     for (var i = 0; i < objects.length; i++) {
       try {
         var json = JSON.parse(objects[i])
-        if (json && json.option) seen[String(json.option)] = json
+        if (!json) continue
+        if (json.option) seen[String(json.option)] = json
+        else if (json.name) animations[String(json.name)] = json
       } catch (e) {
         // Partial or unparseable reply; the remaining objects still count.
       }
@@ -203,6 +254,19 @@ Item {
       if (!inactiveBorder || String(inactiveBorder.gradient || "").toLowerCase()
         !== gradientEcho(Color.foreground, root.inactiveBorderAlpha)) return true
     }
+    if (root.resizeOnBorder) {
+      var resize = seen["general:resize_on_border"]
+      if (!resize || resize.bool !== true) return true
+      var grab = seen["general:extend_border_grab_area"]
+      if (!grab || Number(grab.int) !== root.borderGrabArea) return true
+    }
+    if (root.workspaceAnimation) {
+      var workspaces = animations["workspaces"]
+      if (!workspaces || workspaces.enabled !== true) return true
+      if (Math.abs(Number(workspaces.speed) - root.workspaceAnimationSpeed) > 0.001) return true
+      if (String(workspaces.style || "") !== root.workspaceAnimationStyle) return true
+      if (String(workspaces.bezier || "") !== root.workspaceAnimationCurve) return true
+    }
     return false
   }
 
@@ -223,11 +287,24 @@ Item {
       general.push("col = { active_border = \"" + rgbaToken(Color.foreground, root.activeBorderAlpha)
         + "\", inactive_border = \"" + rgbaToken(Color.foreground, root.inactiveBorderAlpha) + "\" }")
     }
+    if (root.resizeOnBorder) {
+      general.push("resize_on_border = true")
+      general.push("extend_border_grab_area = " + root.borderGrabArea)
+    }
     var sections = []
     if (decoration.length > 0) sections.push("decoration = { " + decoration.join(", ") + " }")
     if (general.length > 0) sections.push("general = { " + general.join(", ") + " }")
-    if (sections.length === 0) return ""
-    return "hl.config({ " + sections.join(", ") + " })"
+
+    var statements = []
+    if (sections.length > 0) statements.push("hl.config({ " + sections.join(", ") + " })")
+    // Animations are their own call in the Lua config, not a config key.
+    if (root.workspaceAnimation) {
+      statements.push("hl.animation({ leaf = \"workspaces\", enabled = true"
+        + ", speed = " + root.workspaceAnimationSpeed
+        + ", bezier = \"" + root.workspaceAnimationCurve + "\""
+        + ", style = \"" + root.workspaceAnimationStyle + "\" })")
+    }
+    return statements.join(" ")
   }
 
   // The legacy-parser equivalent, for a hyprland.conf setup where `eval` is
@@ -246,11 +323,21 @@ Item {
       commands.push("keyword general:col.active_border " + rgbaToken(Color.foreground, root.activeBorderAlpha))
       commands.push("keyword general:col.inactive_border " + rgbaToken(Color.foreground, root.inactiveBorderAlpha))
     }
+    if (root.resizeOnBorder) {
+      commands.push("keyword general:resize_on_border true")
+      commands.push("keyword general:extend_border_grab_area " + root.borderGrabArea)
+    }
+    if (root.workspaceAnimation) {
+      commands.push("keyword animation workspaces,1," + root.workspaceAnimationSpeed
+        + "," + root.workspaceAnimationCurve + "," + root.workspaceAnimationStyle)
+    }
     return commands.join(" ; ")
   }
 
   function handleWindowState(raw) {
-    if (!needsPush(raw)) return
+    var force = root.pendingForce
+    root.pendingForce = false
+    if (!force && !needsPush(raw)) return
     var lua = hyprlandLua()
     if (lua.length === 0) return
     luaProc.command = ["hyprctl", "eval", lua]
@@ -264,7 +351,10 @@ Item {
       + " ; getoption general:border_size"
       + " ; getoption decoration:shadow:enabled"
       + " ; getoption general:col.active_border"
-      + " ; getoption general:col.inactive_border"]
+      + " ; getoption general:col.inactive_border"
+      + " ; getoption general:resize_on_border"
+      + " ; getoption general:extend_border_grab_area"
+      + " ; animations"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.handleWindowState(text)
@@ -408,7 +498,7 @@ Item {
     id: reapplyTimer
     interval: 250
     repeat: false
-    onTriggered: root.apply()
+    onTriggered: root.apply(false)
   }
 
   FileView {
@@ -423,5 +513,5 @@ Item {
     onFileChanged: reload()
   }
 
-  Component.onCompleted: apply()
+  Component.onCompleted: apply(false)
 }
