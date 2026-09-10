@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.mudales.cupertino",
+  "name": "Cupertino",
+  "version": "1.1.0",
+  "author": "Mudales",
+  "license": "MIT",
+  "description": "A macOS-flavored look for the Omarchy shell: one rounded-corner radius across panels, popups, menus, notifications and Hyprland windows, plus hairline card borders and borderless control chrome in place of the theme accent frame.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}
